@@ -28,8 +28,8 @@ services:
     restart: unless-stopped
     networks:
       - wa-api-service
-    env_file: 
-      - /opt/zailom/wa-service/.env
+    # env_file: 
+    #   - /opt/zailom/wa-service/.env
     environment:
       TZ: America/Sao_Paulo
       NODE_ENV: production
