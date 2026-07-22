@@ -1,0 +1,450 @@
+openapi: 3.1.0
+info:
+  title: Zailom WA Service
+  version: 1.0.0
+  summary: Central WhatsApp / Evolution API service — single source of truth for Zailom products.
+  description: |
+    All endpoints below (except `/healthz`, `/readyz`, `/v1/hooks/*`, and `/v1/admin/*`) require
+    a tenant API key in the `Authorization: Bearer <key>` header.
+
+    Admin endpoints require `X-Admin-Token: <ADMIN_TOKEN>`.
+
+    Inbound Evolution webhooks (`/v1/hooks/evolution/:evoName`) are public but
+    protected by an unguessable path and optionally by `X-Evolution-Token`.
+  contact: { name: Zailom Platform }
+servers:
+  - url: https://wa.zailom.com
+    description: Production
+  - url: http://localhost:8080
+    description: Local dev
+
+tags:
+  - name: Health
+  - name: Admin
+  - name: Instances
+  - name: Messages
+  - name: Chat
+  - name: Business
+  - name: Template
+  - name: Webhooks (config)
+  - name: Webhooks (inbound)
+
+security:
+  - TenantKey: []
+
+components:
+  securitySchemes:
+    TenantKey:
+      type: http
+      scheme: bearer
+      bearerFormat: "zwa_live_<prefix>_<secret>"
+    AdminToken:
+      type: apiKey
+      in: header
+      name: X-Admin-Token
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:    { type: string, example: instance_not_found }
+            message: { type: string, example: "instance not found" }
+            details: { type: object, additionalProperties: true, nullable: true }
+    Tenant:
+      type: object
+      properties:
+        id:                { type: string, format: uuid }
+        product:           { type: string, enum: [booking, flow, other] }
+        product_tenant_id: { type: string }
+        name:              { type: string }
+        created_at:        { type: string, format: date-time }
+    Instance:
+      type: object
+      properties:
+        id:                       { type: string, format: uuid }
+        tenant_id:                { type: string, format: uuid }
+        name:                     { type: string }
+        evolution_instance_name:  { type: string }
+        status:                   { type: string, enum: [pending, connecting, connected, disconnected, deleted] }
+        connected_number:         { type: string, nullable: true }
+        qr_code:                  { type: string, nullable: true, description: "base64 PNG data URI" }
+        pairing_code:             { type: string, nullable: true }
+        webhook_url:              { type: string, nullable: true }
+        webhook_events:           { type: array, items: { type: string } }
+        created_at:               { type: string, format: date-time }
+        updated_at:               { type: string, format: date-time }
+    NewInstance:
+      type: object
+      required: [name]
+      properties:
+        name:               { type: string, example: "atendimento-1" }
+        webhook_url:        { type: string, format: uri, nullable: true }
+        webhook_events:     { type: array, items: { type: string }, example: [MESSAGES_UPSERT, CONNECTION_UPDATE] }
+        webhook_by_events:  { type: boolean, default: false }
+        webhook_base64:     { type: boolean, default: false }
+        config:             { type: object, additionalProperties: true }
+    SendText:
+      type: object
+      required: [number, text]
+      properties:
+        number: { type: string, example: "5511999999999" }
+        text:   { type: string, example: "Hello from Zailom!" }
+        delay:  { type: integer, example: 1200 }
+        linkPreview: { type: boolean }
+        quoted: { type: object, additionalProperties: true }
+    SendMedia:
+      type: object
+      required: [number, mediatype]
+      properties:
+        number:    { type: string }
+        mediatype: { type: string, enum: [image, video, document, audio] }
+        mimetype:  { type: string }
+        caption:   { type: string }
+        media:     { type: string, description: "URL or base64" }
+        fileName:  { type: string }
+  responses:
+    Unauthorized:
+      description: Invalid or missing API key
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    Forbidden:
+      description: Insufficient scope
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    NotFound:
+      description: Resource not found
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    Validation:
+      description: Payload validation failed
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    RateLimited:
+      description: Rate limit exceeded
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    Upstream:
+      description: Evolution API error
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+
+paths:
+  # --------------------------------------------------------------- Health
+  /healthz:
+    get:
+      tags: [Health]
+      security: []
+      summary: Liveness
+      responses: { "200": { description: OK } }
+  /readyz:
+    get:
+      tags: [Health]
+      security: []
+      summary: Readiness (checks DB)
+      responses:
+        "200": { description: OK }
+        "503": { description: DB unreachable }
+
+  # --------------------------------------------------------------- Admin
+  /v1/admin/tenants:
+    get:
+      tags: [Admin]
+      security: [{ AdminToken: [] }]
+      summary: List tenants
+      responses:
+        "200":
+          description: OK
+          content: { application/json: { schema: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/Tenant" } } } } } }
+    post:
+      tags: [Admin]
+      security: [{ AdminToken: [] }]
+      summary: Create or upsert tenant
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [product, product_tenant_id, name]
+              properties:
+                product:           { type: string, enum: [booking, flow, other] }
+                product_tenant_id: { type: string, example: "company_abc123" }
+                name:              { type: string }
+                metadata:          { type: object }
+            example:
+              product: booking
+              product_tenant_id: "company_abc123"
+              name: "Salão da Ana"
+      responses:
+        "201":
+          description: Created
+          content: { application/json: { schema: { $ref: "#/components/schemas/Tenant" } } }
+  /v1/admin/api-keys:
+    get:
+      tags: [Admin]
+      security: [{ AdminToken: [] }]
+      summary: List API keys
+      parameters:
+        - in: query
+          name: tenant_id
+          schema: { type: string, format: uuid }
+      responses: { "200": { description: OK } }
+    post:
+      tags: [Admin]
+      security: [{ AdminToken: [] }]
+      summary: Mint an API key for a tenant
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [tenant_id, name]
+              properties:
+                tenant_id: { type: string, format: uuid }
+                name:      { type: string, example: "booking-prod-key" }
+                scopes:
+                  type: array
+                  items: { type: string }
+                  example: ["instances:*","messages:*","chat:*","webhooks:*"]
+      responses:
+        "201":
+          description: Created. The `api_key` is shown only once.
+          content:
+            application/json:
+              example:
+                id: "0193...-uuid"
+                tenant_id: "0193...-uuid"
+                name: "booking-prod-key"
+                api_key: "zwa_live_a1b2c3d4e5f6_...40hex..."
+                warning: "This key will NOT be shown again."
+  /v1/admin/api-keys/{id}:
+    delete:
+      tags: [Admin]
+      security: [{ AdminToken: [] }]
+      summary: Revoke API key
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+      responses: { "204": { description: Revoked } }
+
+  # --------------------------------------------------------------- Instances
+  /v1/instances/all-instances:
+    get:
+      tags: [Instances]
+      summary: List all instances of the calling tenant
+      responses:
+        "200":
+          description: OK
+          content: { application/json: { schema: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/Instance" } } } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /v1/instances/create:
+    post:
+      tags: [Instances]
+      summary: Create instance (Evolution + local record)
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/NewInstance" } } }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              example:
+                id: "018f...-uuid"
+                evolution_instance_name: "booking-abc12345-atendimento-1-9f2a"
+                qr_code: "data:image/png;base64,iVBORw0KG..."
+                status: connecting
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "422": { $ref: "#/components/responses/Validation" }
+        "502": { $ref: "#/components/responses/Upstream" }
+  /v1/instances/{id}:
+    get:
+      tags: [Instances]
+      summary: Instance details
+      parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } } ]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Instance" } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /v1/instances/{id}/connect:
+    post:
+      tags: [Instances]
+      summary: Generate QR / pairing code
+      parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } } ]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties: { number: { type: string, description: "Optional; enables pairing-code flow" } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              example: { qr_code: "data:image/png;base64,...", pairing_code: null, expires_in: 60 }
+  /v1/instance/connectionState/{id}:
+    get:
+      tags: [Instances]
+      summary: Raw Evolution connection state
+      parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } } ]
+      responses: { "200": { description: Evolution response (state, wuid...) } }
+  /v1/instances/{id}/connectionState:
+    get:
+      tags: [Instances]
+      summary: Alias for /v1/instance/connectionState/:id
+      parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } } ]
+      responses: { "200": { description: OK } }
+  /v1/instances/{id}/refresh-status:
+    post:
+      tags: [Instances]
+      summary: Sync local status with Evolution
+      parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } } ]
+      responses: { "200": { description: OK } }
+  /v1/instances/{id}/restart:
+    post:
+      tags: [Instances]
+      summary: Restart instance
+      parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } } ]
+      responses: { "200": { description: OK } }
+  /v1/instances/{id}/logout:
+    post:
+      tags: [Instances]
+      summary: Logout (keep the record)
+      parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } } ]
+      responses: { "200": { description: OK } }
+  /v1/instances/{id}/delete:
+    delete:
+      tags: [Instances]
+      summary: Logout + delete from Evolution + soft-delete locally
+      parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } } ]
+      responses: { "204": { description: Deleted } }
+  /v1/instances/{id}/settings:
+    get:
+      tags: [Instances]
+      summary: Get settings (rejectCall, groupsIgnore, alwaysOnline, ...)
+      parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } } ]
+      responses: { "200": { description: OK } }
+  /v1/instances/{id}/settings/set:
+    post:
+      tags: [Instances]
+      summary: Update settings
+      parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                rejectCall:      { type: boolean }
+                msgCall:         { type: string }
+                groupsIgnore:    { type: boolean }
+                alwaysOnline:    { type: boolean }
+                readMessages:    { type: boolean }
+                readStatus:      { type: boolean }
+                syncFullHistory: { type: boolean }
+      responses: { "200": { description: OK } }
+
+  # --------------------------------------------------------------- Messages
+  /v1/instances/{id}/message/sendText:
+    post:
+      tags: [Messages]
+      summary: Send text message
+      parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/SendText" } } }
+      responses:
+        "200": { description: OK }
+        "502": { $ref: "#/components/responses/Upstream" }
+  /v1/instances/{id}/message/sendMedia:
+    post:
+      tags: [Messages]
+      summary: Send media (image/video/document/audio)
+      parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/SendMedia" } } }
+      responses: { "200": { description: OK } }
+  /v1/instances/{id}/message/sendButtons:
+    post: { tags: [Messages], summary: Send interactive buttons, parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } } ], requestBody: { required: true, content: { application/json: { schema: { type: object } } } }, responses: { "200": { description: OK } } }
+  /v1/instances/{id}/message/sendList:
+    post: { tags: [Messages], summary: Send interactive list, parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } } ], requestBody: { required: true, content: { application/json: { schema: { type: object } } } }, responses: { "200": { description: OK } } }
+  /v1/instances/{id}/message/sendContact:
+    post: { tags: [Messages], summary: Send contact card,  parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } } ], requestBody: { required: true, content: { application/json: { schema: { type: object } } } }, responses: { "200": { description: OK } } }
+  /v1/instances/{id}/message/sendLocation:
+    post: { tags: [Messages], summary: Send location,      parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } } ], requestBody: { required: true, content: { application/json: { schema: { type: object } } } }, responses: { "200": { description: OK } } }
+  /v1/instances/{id}/message/sendPoll:
+    post: { tags: [Messages], summary: Send poll,          parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } } ], requestBody: { required: true, content: { application/json: { schema: { type: object } } } }, responses: { "200": { description: OK } } }
+  /v1/instances/{id}/message/sendReaction:
+    post: { tags: [Messages], summary: React to a message, parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } } ], requestBody: { required: true, content: { application/json: { schema: { type: object } } } }, responses: { "200": { description: OK } } }
+  /v1/instances/{id}/message/sendTemplate:
+    post: { tags: [Messages], summary: Send template (WABA), parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } } ], requestBody: { required: true, content: { application/json: { schema: { type: object } } } }, responses: { "200": { description: OK } } }
+
+  # --------------------------------------------------------------- Chat
+  /v1/instances/{id}/chat/archiveChat:          { post: { tags: [Chat], summary: Archive chat,         parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } } ], requestBody: { content: { application/json: { schema: { type: object } } } }, responses: { "200": { description: OK } } } }
+  /v1/instances/{id}/chat/findChats:            { post: { tags: [Chat], summary: List chats,           parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } } ], requestBody: { content: { application/json: { schema: { type: object } } } }, responses: { "200": { description: OK } } } }
+  /v1/instances/{id}/chat/findContacts:         { post: { tags: [Chat], summary: List contacts,        parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } } ], requestBody: { content: { application/json: { schema: { type: object } } } }, responses: { "200": { description: OK } } } }
+  /v1/instances/{id}/chat/findMessages:         { post: { tags: [Chat], summary: Query messages,       parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } } ], requestBody: { content: { application/json: { schema: { type: object } } } }, responses: { "200": { description: OK } } } }
+  /v1/instances/{id}/chat/markMessageAsRead:    { post: { tags: [Chat], summary: Mark message as read, parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } } ], requestBody: { content: { application/json: { schema: { type: object } } } }, responses: { "200": { description: OK } } } }
+  /v1/instances/{id}/chat/updateProfileName:    { post: { tags: [Chat], summary: Update profile name,  parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } } ], requestBody: { content: { application/json: { schema: { type: object } } } }, responses: { "200": { description: OK } } } }
+  /v1/instances/{id}/chat/updateProfilePicture: { post: { tags: [Chat], summary: Update profile pic,   parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } } ], requestBody: { content: { application/json: { schema: { type: object } } } }, responses: { "200": { description: OK } } } }
+  /v1/instances/{id}/chat/updateProfileStatus:  { post: { tags: [Chat], summary: Update status,        parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } } ], requestBody: { content: { application/json: { schema: { type: object } } } }, responses: { "200": { description: OK } } } }
+  /v1/instances/{id}/chat/whatsappNumbers:      { post: { tags: [Chat], summary: Check numbers on WA,  parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } } ], requestBody: { content: { application/json: { schema: { type: object, properties: { numbers: { type: array, items: { type: string } } } } } } }, responses: { "200": { description: OK } } } }
+
+  # --------------------------------------------------------------- Business
+  /v1/instances/{id}/business/getCatalog:     { get: { tags: [Business], summary: Get catalog,     parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } } ], responses: { "200": { description: OK } } } }
+  /v1/instances/{id}/business/getCollections: { get: { tags: [Business], summary: Get collections, parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } } ], responses: { "200": { description: OK } } } }
+
+  # --------------------------------------------------------------- Template
+  /v1/instances/{id}/template/create: { post:   { tags: [Template], summary: Create template, parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } } ], requestBody: { content: { application/json: { schema: { type: object } } } }, responses: { "200": { description: OK } } } }
+  /v1/instances/{id}/template/edit:   { post:   { tags: [Template], summary: Edit template,   parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } } ], requestBody: { content: { application/json: { schema: { type: object } } } }, responses: { "200": { description: OK } } } }
+  /v1/instances/{id}/template/delete: { delete: { tags: [Template], summary: Delete template, parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } } ], requestBody: { content: { application/json: { schema: { type: object, required: [name], properties: { name: { type: string } } } } } }, responses: { "200": { description: OK } } } }
+  /v1/instances/{id}/template/find:   { get:    { tags: [Template], summary: List templates,  parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } } ], responses: { "200": { description: OK } } } }
+
+  # --------------------------------------------------------------- Webhook config (per instance)
+  /v1/instances/{id}/webhook/find:
+    get:
+      tags: [Webhooks (config)]
+      summary: Get outbound webhook config (this service -> tenant)
+      parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } } ]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              example:
+                url: "https://booking.zailom.com/api/webhooks/wa"
+                byEvents: false
+                base64: false
+                events: [MESSAGES_UPSERT, CONNECTION_UPDATE]
+  /v1/instances/{id}/webhook/set:
+    post:
+      tags: [Webhooks (config)]
+      summary: Configure outbound webhook
+      parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [url]
+              properties:
+                url:      { type: string, format: uri, nullable: true }
+                byEvents: { type: boolean }
+                base64:   { type: boolean }
+                events:   { type: array, items: { type: string } }
+      responses: { "200": { description: OK } }
+
+  # --------------------------------------------------------------- Inbound (public)
+  /v1/hooks/evolution/{evoName}:
+    post:
+      tags: [Webhooks (inbound)]
+      security: []
+      summary: Inbound webhook from Evolution. Do NOT call from your app.
+      parameters: [ { in: path, name: evoName, required: true, schema: { type: string } } ]
+      requestBody:
+        content: { application/json: { schema: { type: object, additionalProperties: true } } }
+      responses:
+        "200": { description: Accepted }
+        "202": { description: Unknown instance (silently accepted) }
+        "401": { description: Invalid EVOLUTION_INBOUND_TOKEN }

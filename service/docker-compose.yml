@@ -1,0 +1,73 @@
+version: "3.8"
+
+# =============================================================================
+# Stack: zailom-wa-service
+# Fastify TS service that centralises Evolution API for all Zailom products.
+# Exposed at https://wa.zailom.com via Traefik (leresolver).
+# =============================================================================
+#
+# Prereqs (already true no seu Portainer):
+#   - external network `wa-api-service` existe e o traefik está anexado nela
+#   - Traefik com entrypoints web(80) + websecure(443) e certresolver `leresolver`
+#
+# Antes de subir a stack, preencha no Portainer (Stack env):
+#   SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, DATABASE_URL,
+#   EVOLUTION_GLOBAL_API_KEY, ADMIN_TOKEN, WEBHOOK_SIGNING_SECRET
+# =============================================================================
+
+services:
+  wa-service:
+    # Opção A (recomendada): buildar via CI e publicar em registry, então
+    #   image: ghcr.io/SUAORG/zailom-wa-service:latest
+    # Opção B: buildar no host do Portainer usando o context abaixo.
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: zailom/wa-service:latest
+    container_name: zailom-wa-service
+    restart: unless-stopped
+    networks:
+      - wa-api-service
+    environment:
+      TZ: America/Sao_Paulo
+      NODE_ENV: production
+      PORT: "8080"
+      LOG_LEVEL: info
+
+      SUPABASE_URL: ${SUPABASE_URL}
+      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
+      DATABASE_URL: ${DATABASE_URL}
+
+      EVOLUTION_BASE_URL: ${EVOLUTION_BASE_URL:-https://api-evo.zailom.com}
+      EVOLUTION_GLOBAL_API_KEY: ${EVOLUTION_GLOBAL_API_KEY}
+      EVOLUTION_INBOUND_TOKEN: ${EVOLUTION_INBOUND_TOKEN:-}
+
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://wa.zailom.com}
+      ADMIN_TOKEN: ${ADMIN_TOKEN}
+      WEBHOOK_SIGNING_SECRET: ${WEBHOOK_SIGNING_SECRET}
+
+      CORS_ORIGINS: ${CORS_ORIGINS:-https://booking.zailom.com,https://flow.zailom.com,https://app.zailom.com}
+      RATE_LIMIT_MAX: ${RATE_LIMIT_MAX:-300}
+      RATE_LIMIT_WINDOW_MS: ${RATE_LIMIT_WINDOW_MS:-60000}
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=wa-api-service"
+
+      # HTTP :80 -> redireciona pra HTTPS
+      - "traefik.http.routers.wa-service-http.rule=Host(`wa.zailom.com`)"
+      - "traefik.http.routers.wa-service-http.entrypoints=web"
+      - "traefik.http.routers.wa-service-http.middlewares=wa-service-redirect"
+      - "traefik.http.middlewares.wa-service-redirect.redirectscheme.scheme=https"
+      - "traefik.http.middlewares.wa-service-redirect.redirectscheme.permanent=true"
+
+      # HTTPS :443
+      - "traefik.http.routers.wa-service.rule=Host(`wa.zailom.com`)"
+      - "traefik.http.routers.wa-service.entrypoints=websecure"
+      - "traefik.http.routers.wa-service.tls=true"
+      - "traefik.http.routers.wa-service.tls.certresolver=leresolver"
+      - "traefik.http.routers.wa-service.service=wa-service"
+      - "traefik.http.services.wa-service.loadbalancer.server.port=8080"
+
+networks:
+  wa-api-service:
+    external: true
