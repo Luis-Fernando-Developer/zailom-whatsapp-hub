@@ -46,17 +46,27 @@ export async function evolutionInboundRoutes(app: FastifyInstance) {
     // Keep our local state consistent with Evolution.
     try {
       if (event === "connection.update" || event === "CONNECTION_UPDATE") {
-        const data = (body.data ?? {}) as { state?: string; wuid?: string };
+        const data = (body.data ?? {}) as {
+          state?: string;
+          connectionStatus?: string;
+          wuid?: string;
+          owner?: string;
+          number?: string;
+        };
+        const state = String(data.connectionStatus ?? data.state ?? "").toLowerCase();
         const mapped =
-          data.state === "open" ? "connected" :
-          data.state === "connecting" ? "connecting" :
-          data.state === "close" ? "disconnected" : null;
+          state === "open" ? "connected" :
+          state === "close" ? "disconnected" :
+          state === "connecting" ? "connecting" :
+          state === "qrcode" || state === "qr" ? "qrcode" : null;
+        const ownerRaw = data.wuid ?? data.owner ?? data.number ?? null;
+        const connectedNumber = ownerRaw ? String(ownerRaw).replace(/@.*$/, "") : null;
         if (mapped) {
           await query(
             `UPDATE instances SET status=$2::instance_status,
                connected_number = COALESCE($3, connected_number),
                last_sync_at = now() WHERE id=$1`,
-            [inst.id, mapped, data.wuid ? data.wuid.replace(/@.*$/, "") : null],
+            [inst.id, mapped, connectedNumber],
           );
         }
       } else if (event === "qrcode.updated" || event === "QRCODE_UPDATED") {

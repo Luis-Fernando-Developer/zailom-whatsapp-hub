@@ -118,21 +118,36 @@ export async function instanceRoutes(app: FastifyInstance) {
   app.post("/:id/refresh-status", { preHandler: requireScope("instances:read") }, async (req) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
     const inst = await loadInstance(req.tenant!.id, id);
-    const res = (await evolution.connectionState(inst.evolution_instance_name)) as {
-      instance?: { state?: string; wuid?: string };
-    };
-    const state = res?.instance?.state ?? "unknown";
-    const wuid = res?.instance?.wuid ?? null;
+    const res = (await evolution.fetchInstances(inst.evolution_instance_name)) as
+      | Array<{
+          instance?: {
+            owner?: string;
+            profileName?: string;
+            number?: string;
+            connectionStatus?: string;
+            state?: string;
+          };
+        }>
+      | { instance?: { owner?: string; number?: string; connectionStatus?: string; state?: string } };
+
+    const first = Array.isArray(res) ? res[0] : res;
+    const raw = first?.instance ?? {};
+    const state = String(raw.connectionStatus ?? raw.state ?? "unknown").toLowerCase();
     const mapped =
       state === "open" ? "connected" :
+      state === "close" ? "disconnected" :
       state === "connecting" ? "connecting" :
-      state === "close" ? "disconnected" : inst.status;
+      state === "qrcode" || state === "qr" ? "qrcode" :
+      inst.status;
+    const owner = raw.owner ?? raw.number ?? null;
+    const connectedNumber = owner ? String(owner).replace(/@.*$/, "") : null;
     await query(
-      `UPDATE instances SET status=$2::instance_status, connected_number=COALESCE($3, connected_number),
+      `UPDATE instances SET status=$2::instance_status,
+         connected_number=COALESCE($3, connected_number),
          last_sync_at=now() WHERE id=$1`,
-      [id, mapped, wuid ? wuid.replace(/@.*$/, "") : null],
+      [id, mapped, connectedNumber],
     );
-    return { status: mapped, connected_number: wuid, raw: res };
+    return { status: mapped, connected_number: connectedNumber, raw: res };
   });
 
   // ---------------------------------------------------------- restart
