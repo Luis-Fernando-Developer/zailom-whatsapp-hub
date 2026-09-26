@@ -154,7 +154,7 @@ export async function instanceRoutes(app: FastifyInstance) {
          last_sync_at=now() WHERE id=$1`,
       [id, mapped, connectedNumber],
     );
-    return { status: mapped, connected_number: connectedNumber, raw: res };
+    return { status: mapped, connected_number: connectedNumber, raw: stateRes };
   });
 
   // ---------------------------------------------------------- restart
