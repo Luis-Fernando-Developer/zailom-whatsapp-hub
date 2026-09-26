@@ -98,6 +98,7 @@ export const evolution = {
   updateProfilePicture: (i: string, body: unknown) => evo("POST", `/chat/updateProfilePicture/${encodeURIComponent(i)}`, body),
   updateProfileStatus: (i: string, body: unknown) => evo("POST", `/chat/updateProfileStatus/${encodeURIComponent(i)}`, body),
   whatsappNumbers: (i: string, body: unknown) => evo("POST", `/chat/whatsappNumbers/${encodeURIComponent(i)}`, body),
+  updatePresence: (i: string, body: unknown) => evo("POST", `/chat/updatePresence/${encodeURIComponent(i)}`, body),
 
   // --- Business -----------------------------------------------------------
   getCatalog: (i: string) => evo("GET", `/business/getCatalog/${encodeURIComponent(i)}`),
