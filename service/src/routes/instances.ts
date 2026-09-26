@@ -118,27 +118,34 @@ export async function instanceRoutes(app: FastifyInstance) {
   app.post("/:id/refresh-status", { preHandler: requireScope("instances:read") }, async (req) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
     const inst = await loadInstance(req.tenant!.id, id);
-    const res = (await evolution.fetchInstances(inst.evolution_instance_name)) as
-      | Array<{
-          instance?: {
-            owner?: string;
-            profileName?: string;
-            number?: string;
-            connectionStatus?: string;
-            state?: string;
-          };
-        }>
-      | { instance?: { owner?: string; number?: string; connectionStatus?: string; state?: string } };
+    // Use Evolution's canonical connectionState endpoint for the status.
+    // fetchInstances can lag or expose the state under different fields.
+    const stateRes = await evolution.connectionState(inst.evolution_instance_name) as
+      | { instance?: { state?: string; status?: string; connectionStatus?: string } }
+      | { state?: string; status?: string; connectionStatus?: string }
+      | null;
 
-    const first = Array.isArray(res) ? res[0] : res;
-    const raw = first?.instance ?? {};
-    const state = String(raw.connectionStatus ?? raw.state ?? "unknown").toLowerCase();
+    const stateObj = (stateRes as { instance?: Record<string, unknown> } | null)?.instance ?? stateRes ?? {};
+    const rawState =
+      (stateObj as Record<string, unknown>).state ??
+      (stateObj as Record<string, unknown>).status ??
+      (stateObj as Record<string, unknown>).connectionStatus ??
+      "unknown";
+    const state = String(rawState).trim().toLowerCase();
     const mapped =
-      state === "open" ? "connected" :
-      state === "close" ? "disconnected" :
-      state === "connecting" ? "connecting" :
-      state === "qrcode" || state === "qr" ? "qrcode" :
+      ["open", "connected", "online"].includes(state) ? "connected" :
+      ["close", "closed", "disconnected", "offline"].includes(state) ? "disconnected" :
+      ["connecting", "pairing"].includes(state) ? "connecting" :
+      ["qrcode", "qr", "qr_code"].includes(state) ? "qrcode" :
       inst.status;
+
+    // Fetch the instance details only for the connected number.
+    const instancesRes = await evolution.fetchInstances(inst.evolution_instance_name) as
+      | Array<{ instance?: { owner?: string; number?: string } }>
+      | { instance?: { owner?: string; number?: string } }
+      | null;
+    const first = Array.isArray(instancesRes) ? instancesRes[0] : instancesRes;
+    const raw = first?.instance ?? {};
     const owner = raw.owner ?? raw.number ?? null;
     const connectedNumber = owner ? String(owner).replace(/@.*$/, "") : null;
     await query(
@@ -189,11 +196,14 @@ export async function instanceRoutes(app: FastifyInstance) {
   });
 
   // ---------------------------------------------------------- settings
-  app.get("/:id/settings", { preHandler: requireScope("instances:read") }, async (req) => {
+  const getSettings = async (req: import("fastify").FastifyRequest) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
     const inst = await loadInstance(req.tenant!.id, id);
     return evolution.getSettings(inst.evolution_instance_name);
-  });
+  };
+  app.get("/:id/settings", { preHandler: requireScope("instances:read") }, getSettings);
+  // Booking compatibility alias: its contract uses /settings/find.
+  app.get("/:id/settings/find", { preHandler: requireScope("instances:read") }, getSettings);
 
   const settingsBody = z.object({
     rejectCall: z.boolean().optional(),
