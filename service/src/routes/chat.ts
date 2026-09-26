@@ -29,4 +29,5 @@ export async function chatRoutes(app: FastifyInstance) {
   app.post("/:id/chat/updateProfilePicture",s, proxy(evolution.updateProfilePicture));
   app.post("/:id/chat/updateProfileStatus", s, proxy(evolution.updateProfileStatus));
   app.post("/:id/chat/whatsappNumbers",     r, proxy(evolution.whatsappNumbers));
+  app.post("/:id/chat/updatePresence",      s, proxy(evolution.updatePresence));
 }
