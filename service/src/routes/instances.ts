@@ -94,16 +94,44 @@ export async function instanceRoutes(app: FastifyInstance) {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
     const body = z.object({ number: z.string().optional() }).parse(req.body ?? {});
     const inst = await loadInstance(req.tenant!.id, id);
-    const res = (await evolution.connect(inst.evolution_instance_name, body.number)) as {
-      base64?: string; code?: string; pairingCode?: string;
-    };
+    const res = (await evolution.connect(inst.evolution_instance_name, body.number)) as any;
+
+    // Evolution pode variar o envelope conforme o estado/versão da instância.
+    // Normalize os formatos conhecidos para que Booking e Flow recebam o mesmo contrato.
+    const qrCode =
+      res?.base64 ??
+      res?.qr_code ??
+      res?.qrCode ??
+      res?.qrcode?.base64 ??
+      res?.qrcode?.qr_code ??
+      res?.qrcode?.qrCode ??
+      res?.instance?.base64 ??
+      res?.instance?.qrcode?.base64 ??
+      null;
+    const pairingCode =
+      res?.pairingCode ??
+      res?.pairing_code ??
+      res?.code ??
+      res?.instance?.pairingCode ??
+      res?.instance?.code ??
+      null;
+
     await query(
       `UPDATE instances SET status='connecting', qr_code=$2, pairing_code=$3,
          qr_expires_at = now() + interval '60 seconds' WHERE id=$1`,
-      [id, res?.base64 ?? null, res?.pairingCode ?? res?.code ?? null],
+      [id, qrCode, pairingCode],
     );
     await audit({ tenantId: req.tenant!.id, actor: `api_key:${req.tenant!.apiKeyId}`, action: "instance.connect", resourceId: id });
-    return { qr_code: res?.base64 ?? null, pairing_code: res?.pairingCode ?? res?.code ?? null, expires_in: 60 };
+    return {
+      qr_code: qrCode,
+      qrCode,
+      base64: qrCode,
+      pairing_code: pairingCode,
+      pairingCode,
+      expires_in: 60,
+      // Mantém o payload original para diagnóstico sem quebrar os consumidores existentes.
+      raw: res,
+    };
   });
 
   // ---------------------------------------------------------- connection state (mirrors Evolution's path shape)
