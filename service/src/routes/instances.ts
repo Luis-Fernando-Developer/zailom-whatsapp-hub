@@ -342,27 +342,15 @@ export async function instanceRoutes(app: FastifyInstance) {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
     const body = z.record(z.unknown()).parse(req.body ?? {});
     const inst = await loadInstance(req.tenant!.id, id);
-    let result: unknown;
-    try {
-      result = await evolution.raw("POST", `/evolutionBot/create/${encodeURIComponent(inst.evolution_instance_name)}`, body);
-    } catch (error: any) {
-      // The Evolution API updates bots by bot ID AND instance name. Never call
-      // /update/{instance} — that route returns 404 and hides the create error.
-      const status = error?.details?.status ?? error?.statusCode;
-      if (status !== 400 && status !== 409) throw error;
-      let existing: { bot: Record<string, unknown> | null; botId: string | null };
-      try {
-        existing = await findEvolutionBot(inst.evolution_instance_name);
-      } catch {
-        throw error;
-      }
-      if (!existing.botId) throw error;
-      result = await evolution.raw(
-        "PUT",
-        `/evolutionBot/update/${encodeURIComponent(existing.botId)}/${encodeURIComponent(inst.evolution_instance_name)}`,
-        body,
-      );
-    }
+    const instanceName = inst.evolution_instance_name;
+
+    // Evolution v2 updates an existing bot by ID and instance name. Check first
+    // rather than attempting create and relying on an error to detect duplicates.
+    const existing = await findEvolutionBot(instanceName);
+    const result = existing.botId
+      ? await evolution.raw("PUT", `/evolutionBot/update/${encodeURIComponent(existing.botId)}/${encodeURIComponent(instanceName)}`, body)
+      : await evolution.raw("POST", `/evolutionBot/create/${encodeURIComponent(instanceName)}`, body);
+
     await audit({ tenantId: req.tenant!.id, actor: `api_key:${req.tenant!.apiKeyId}`, action: "instance.bot.set", resourceId: id });
     return { bot: (result as any)?.evolutionBot ?? (result as any)?.bot ?? result };
   });
