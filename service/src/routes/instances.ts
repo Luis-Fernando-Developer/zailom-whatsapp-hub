@@ -295,7 +295,7 @@ export async function instanceRoutes(app: FastifyInstance) {
 
   // ---------------------------------------------------------- Evolution Bot compatibility (Booking)
   // Booking uses /v1/instances/:id/bot; the tenant is always resolved from the API key.
-  app.get("/:id/bot", { preHandler: requireScope("instances:read") }, async (req, reply) => {
+  app.get("/:id/bot", { preHandler: requireScope("instances:read") }, async (req) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
     const inst = await loadInstance(req.tenant!.id, id);
     try {
