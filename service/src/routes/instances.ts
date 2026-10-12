@@ -169,13 +169,25 @@ export async function instanceRoutes(app: FastifyInstance) {
 
     // Fetch the instance details only for the connected number.
     const instancesRes = await evolution.fetchInstances(inst.evolution_instance_name) as
-      | Array<{ instance?: { owner?: string; number?: string } }>
-      | { instance?: { owner?: string; number?: string } }
+      | Array<Record<string, any>>
+      | Record<string, any>
       | null;
-    const first = Array.isArray(instancesRes) ? instancesRes[0] : instancesRes;
-    const raw = first?.instance ?? {};
-    const owner = raw.owner ?? raw.number ?? null;
-    const connectedNumber = owner ? String(owner).replace(/@.*$/, "") : null;
+    const first = Array.isArray(instancesRes)
+      ? (instancesRes.find((item) =>
+          item?.instance?.instanceName === inst.evolution_instance_name ||
+          item?.instanceName === inst.evolution_instance_name ||
+          item?.name === inst.evolution_instance_name
+        ) ?? instancesRes[0])
+      : instancesRes;
+    const raw = (first?.instance && typeof first.instance === "object" ? first.instance : first) ?? {};
+    // Evolution/Baileys varia o campo do número entre versões: owner, ownerJid,
+    // number ou remoteJid. Normalizamos JID e sufixo de dispositivo para E.164.
+    const candidate = raw.owner ?? raw.ownerJid ?? raw.number ?? raw.phoneNumber ??
+      raw.phone ?? raw.remoteJid ?? first?.owner ?? first?.ownerJid ??
+      first?.number ?? first?.phoneNumber ?? first?.phone ?? null;
+    const connectedNumber = candidate
+      ? String(candidate).split("@")[0].replace(/:\\d+$/, "").replace(/\\D/g, "") || null
+      : null;
     await query(
       `UPDATE instances SET status=$2::instance_status,
          connected_number=COALESCE($3, connected_number),
@@ -279,6 +291,46 @@ export async function instanceRoutes(app: FastifyInstance) {
     );
     await audit({ tenantId: req.tenant!.id, actor: `api_key:${req.tenant!.apiKeyId}`, action: "instance.webhook.set", resourceId: id, payload: body });
     return { ok: true };
+  });
+
+  // ---------------------------------------------------------- Evolution Bot compatibility (Booking)
+  // Booking uses /v1/instances/:id/bot; the tenant is always resolved from the API key.
+  app.get("/:id/bot", { preHandler: requireScope("instances:read") }, async (req, reply) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
+    const inst = await loadInstance(req.tenant!.id, id);
+    try {
+      const result = await evolution.raw("GET", `/evolutionBot/find/${encodeURIComponent(inst.evolution_instance_name)}`) as any;
+      return { bot: result?.evolutionBot ?? result?.bot ?? result ?? null };
+    } catch (error: any) {
+      const status = error?.details?.status ?? error?.statusCode;
+      if (status === 404) return { bot: null };
+      throw error;
+    }
+  });
+
+  app.post("/:id/bot", { preHandler: requireScope("instances:write") }, async (req) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
+    const body = z.record(z.unknown()).parse(req.body ?? {});
+    const inst = await loadInstance(req.tenant!.id, id);
+    let result: unknown;
+    try {
+      result = await evolution.raw("POST", `/evolutionBot/create/${encodeURIComponent(inst.evolution_instance_name)}`, body);
+    } catch (error: any) {
+      // If already configured, update rather than forcing the user to delete it first.
+      const status = error?.details?.status ?? error?.statusCode;
+      if (status !== 400 && status !== 409) throw error;
+      result = await evolution.raw("PUT", `/evolutionBot/update/${encodeURIComponent(inst.evolution_instance_name)}`, body);
+    }
+    await audit({ tenantId: req.tenant!.id, actor: `api_key:${req.tenant!.apiKeyId}`, action: "instance.bot.set", resourceId: id });
+    return { bot: (result as any)?.evolutionBot ?? (result as any)?.bot ?? result };
+  });
+
+  app.delete("/:id/bot", { preHandler: requireScope("instances:write") }, async (req) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
+    const inst = await loadInstance(req.tenant!.id, id);
+    const result = await evolution.raw("DELETE", `/evolutionBot/delete/${encodeURIComponent(inst.evolution_instance_name)}`);
+    await audit({ tenantId: req.tenant!.id, actor: `api_key:${req.tenant!.apiKeyId}`, action: "instance.bot.delete", resourceId: id });
+    return { success: true, raw: result };
   });
 
   // ---------------------------------------------------------- generic passthrough helpers
