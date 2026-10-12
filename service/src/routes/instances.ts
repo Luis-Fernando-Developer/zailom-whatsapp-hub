@@ -313,6 +313,15 @@ export async function instanceRoutes(app: FastifyInstance) {
     }
   });
 
+  const findEvolutionBot = async (instanceName: string): Promise<{ bot: Record<string, unknown> | null; botId: string | null }> => {
+    const found = await evolution.raw("GET", `/evolutionBot/find/${encodeURIComponent(instanceName)}`) as any;
+    const envelope = found?.evolutionBot ?? found?.bot ?? found?.data ?? found;
+    const bot = Array.isArray(envelope) ? envelope[0] : envelope;
+    if (!bot || typeof bot !== "object") return { bot: null, botId: null };
+    const candidateId = bot.evolutionBotId ?? bot.evolutionBot?.id ?? bot.id ?? bot.botId ?? bot.uuid;
+    return { bot, botId: candidateId == null ? null : String(candidateId) };
+  };
+
   app.post("/:id/bot", { preHandler: requireScope("instances:write") }, async (req) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
     const body = z.record(z.unknown()).parse(req.body ?? {});
@@ -321,10 +330,22 @@ export async function instanceRoutes(app: FastifyInstance) {
     try {
       result = await evolution.raw("POST", `/evolutionBot/create/${encodeURIComponent(inst.evolution_instance_name)}`, body);
     } catch (error: any) {
-      // If already configured, update rather than forcing the user to delete it first.
+      // The Evolution API updates bots by bot ID AND instance name. Never call
+      // /update/{instance} — that route returns 404 and hides the create error.
       const status = error?.details?.status ?? error?.statusCode;
       if (status !== 400 && status !== 409) throw error;
-      result = await evolution.raw("PUT", `/evolutionBot/update/${encodeURIComponent(inst.evolution_instance_name)}`, body);
+      let existing: { bot: Record<string, unknown> | null; botId: string | null };
+      try {
+        existing = await findEvolutionBot(inst.evolution_instance_name);
+      } catch {
+        throw error;
+      }
+      if (!existing.botId) throw error;
+      result = await evolution.raw(
+        "PUT",
+        `/evolutionBot/update/${encodeURIComponent(existing.botId)}/${encodeURIComponent(inst.evolution_instance_name)}`,
+        body,
+      );
     }
     await audit({ tenantId: req.tenant!.id, actor: `api_key:${req.tenant!.apiKeyId}`, action: "instance.bot.set", resourceId: id });
     return { bot: (result as any)?.evolutionBot ?? (result as any)?.bot ?? result };
@@ -333,7 +354,15 @@ export async function instanceRoutes(app: FastifyInstance) {
   app.delete("/:id/bot", { preHandler: requireScope("instances:write") }, async (req) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
     const inst = await loadInstance(req.tenant!.id, id);
-    const result = await evolution.raw("DELETE", `/evolutionBot/delete/${encodeURIComponent(inst.evolution_instance_name)}`);
+    const existing = await findEvolutionBot(inst.evolution_instance_name);
+    if (!existing.botId) {
+      await audit({ tenantId: req.tenant!.id, actor: `api_key:${req.tenant!.apiKeyId}`, action: "instance.bot.delete", resourceId: id });
+      return { success: true, raw: { message: "No Evolution Bot configured" } };
+    }
+    const result = await evolution.raw(
+      "DELETE",
+      `/evolutionBot/delete/${encodeURIComponent(existing.botId)}/${encodeURIComponent(inst.evolution_instance_name)}`,
+    );
     await audit({ tenantId: req.tenant!.id, actor: `api_key:${req.tenant!.apiKeyId}`, action: "instance.bot.delete", resourceId: id });
     return { success: true, raw: result };
   });
