@@ -318,7 +318,7 @@ export async function instanceRoutes(app: FastifyInstance) {
     const envelope = found?.evolutionBot ?? found?.bot ?? found?.data ?? found;
     const bot = Array.isArray(envelope) ? envelope[0] : envelope;
     if (!bot || typeof bot !== "object") return { bot: null, botId: null };
-    const candidateId = bot.evolutionBotId ?? bot.evolutionBot?.id ?? bot.id ?? bot.botId ?? bot.uuid;
+    const candidateId = bot.evolutionBotId ?? bot.evolutionBot?.evolutionBotId ?? bot.evolutionBot?.id ?? bot.id ?? bot.botId ?? bot.uuid ?? bot.data?.evolutionBotId ?? bot.data?.id;
     return { bot, botId: candidateId == null ? null : String(candidateId) };
   };
 
