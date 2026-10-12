@@ -350,9 +350,51 @@ export async function instanceRoutes(app: FastifyInstance) {
     if (existing.bot && !existing.botId) {
       throw new Error("Evolution Bot exists, but GET /evolutionBot/find did not return its ID; refusing to create a duplicate.");
     }
+    // Booking's UI uses title-cased labels and a few UI-only fields. Evolution v2
+    // expects lowercase enum values, triggerValue (not triggerKeyword), and ignoreJids as an array.
+    const rawTriggerType = String(body.triggerType ?? "keyword").trim().toLowerCase();
+    const rawTriggerOperator = String(body.triggerOperator ?? "contains").trim().toLowerCase();
+    const triggerType = rawTriggerType === "all" || rawTriggerType === "all messages"
+      ? "all"
+      : "keyword";
+    const operatorMap: Record<string, string> = {
+      contains: "contains",
+      equals: "equals",
+      startswith: "startsWith",
+      endswith: "endsWith",
+      regex: "regex",
+      none: "none",
+    };
+    const triggerOperator = rawTriggerType === "none"
+      ? "none"
+      : (operatorMap[rawTriggerOperator.replace(/[\\s_-]/g, "")] ?? operatorMap[rawTriggerOperator] ?? "contains");
+    const rawIgnoreJids = body.ignoreJids;
+    const ignoreJids = Array.isArray(rawIgnoreJids)
+      ? rawIgnoreJids.map(String).map((v) => v.trim()).filter(Boolean)
+      : typeof rawIgnoreJids === "string"
+        ? rawIgnoreJids.split(",").map((v) => v.trim()).filter(Boolean)
+        : [];
+    const evolutionBody: Record<string, unknown> = {
+      enabled: body.enabled !== false,
+      apiUrl: typeof body.apiUrl === "string" ? body.apiUrl.trim().replace(/\\/$/, "") : "",
+      triggerType,
+      triggerOperator,
+      triggerValue: rawTriggerType === "none" ? "" : String(body.triggerValue ?? body.triggerKeyword ?? ""),
+      expire: Number(body.expire ?? 0),
+      keywordFinish: String(body.keywordFinish ?? "#SAIR"),
+      delayMessage: Number(body.delayMessage ?? 1000),
+      unknownMessage: String(body.unknownMessage ?? "Mensagem não reconhecida"),
+      listeningFromMe: body.listeningFromMe === true,
+      stopBotFromMe: body.stopBotFromMe === true,
+      keepOpen: body.keepOpen === true,
+      debounceTime: Number(body.debounceTime ?? 0),
+      ignoreJids,
+    };
+    if (typeof body.apiKey === "string" && body.apiKey.trim()) evolutionBody.apiKey = body.apiKey.trim();
+
     const result = existing.botId
-      ? await evolution.raw("PUT", `/evolutionBot/update/${encodeURIComponent(existing.botId)}/${encodeURIComponent(instanceName)}`, body)
-      : await evolution.raw("POST", `/evolutionBot/create/${encodeURIComponent(instanceName)}`, body);
+      ? await evolution.raw("PUT", `/evolutionBot/update/${encodeURIComponent(existing.botId)}/${encodeURIComponent(instanceName)}`, evolutionBody)
+      : await evolution.raw("POST", `/evolutionBot/create/${encodeURIComponent(instanceName)}`, evolutionBody);
 
     await audit({ tenantId: req.tenant!.id, actor: `api_key:${req.tenant!.apiKeyId}`, action: "instance.bot.set", resourceId: id });
     return { bot: (result as any)?.evolutionBot ?? (result as any)?.bot ?? result };
