@@ -314,12 +314,28 @@ export async function instanceRoutes(app: FastifyInstance) {
   });
 
   const findEvolutionBot = async (instanceName: string): Promise<{ bot: Record<string, unknown> | null; botId: string | null }> => {
-    const found = await evolution.raw("GET", `/evolutionBot/find/${encodeURIComponent(instanceName)}`) as any;
-    const envelope = found?.evolutionBot ?? found?.bot ?? found?.data ?? found;
-    const bot = Array.isArray(envelope) ? envelope[0] : envelope;
-    if (!bot || typeof bot !== "object") return { bot: null, botId: null };
+    let found: any;
+    try {
+      found = await evolution.raw("GET", `/evolutionBot/find/${encodeURIComponent(instanceName)}`);
+    } catch (error: any) {
+      const status = error?.details?.status ?? error?.statusCode;
+      if (status === 404) return { bot: null, botId: null };
+      throw error;
+    }
+
+    // Normalize the common Evolution v2 response envelopes.
+    let candidate: any = found;
+    for (let depth = 0; depth < 4; depth++) {
+      if (Array.isArray(candidate)) { candidate = candidate[0] ?? null; continue; }
+      if (!candidate || typeof candidate !== "object") return { bot: null, botId: null };
+      const nested = candidate.evolutionBot ?? candidate.bot ?? candidate.data;
+      if (nested && nested !== candidate) { candidate = nested; continue; }
+      break;
+    }
+    if (!candidate || typeof candidate !== "object") return { bot: null, botId: null };
+    const bot = candidate as Record<string, any>;
     const candidateId = bot.evolutionBotId ?? bot.evolutionBot?.evolutionBotId ?? bot.evolutionBot?.id ?? bot.id ?? bot.botId ?? bot.uuid ?? bot.data?.evolutionBotId ?? bot.data?.id;
-    return { bot, botId: candidateId == null ? null : String(candidateId) };
+    return { bot, botId: candidateId == null || String(candidateId).trim() === "" ? null : String(candidateId) };
   };
 
   app.post("/:id/bot", { preHandler: requireScope("instances:write") }, async (req) => {
