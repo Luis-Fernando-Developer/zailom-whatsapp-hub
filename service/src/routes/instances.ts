@@ -191,7 +191,7 @@ export async function instanceRoutes(app: FastifyInstance) {
       raw.phone ?? raw.remoteJid ?? first.owner ?? first.ownerJid ??
       first.number ?? first.phoneNumber ?? first.phone ?? null;
     const connectedNumber = candidate
-      ? String(candidate).split("@")[0].replace(/:\d+$/, "").replace(/\D/g, "") || null
+      ? String(candidate).split("@")[0]?.replace(/:\d+$/, "").replace(/\D/g, "") || null
       : null;
     await query(
       `UPDATE instances SET status=$2::instance_status,
