@@ -179,7 +179,7 @@ export async function instanceRoutes(app: FastifyInstance) {
       : instancesRes && typeof instancesRes === "object"
         ? [instancesRes]
         : [];
-    const first = instances.find((item) =>
+    const first: Record<string, any> = instances.find((item) =>
       item?.instance?.instanceName === inst.evolution_instance_name ||
       item?.instanceName === inst.evolution_instance_name ||
       item?.name === inst.evolution_instance_name
