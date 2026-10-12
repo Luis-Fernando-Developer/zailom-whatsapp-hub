@@ -367,7 +367,7 @@ export async function instanceRoutes(app: FastifyInstance) {
     };
     const triggerOperator = rawTriggerType === "none"
       ? "none"
-      : (operatorMap[rawTriggerOperator.replace(/[\\s_-]/g, "")] ?? operatorMap[rawTriggerOperator] ?? "contains");
+      : (operatorMap[rawTriggerOperator.replace(/[\s_-]/g, "")] ?? operatorMap[rawTriggerOperator] ?? "contains");
     const rawIgnoreJids = body.ignoreJids;
     const ignoreJids = Array.isArray(rawIgnoreJids)
       ? rawIgnoreJids.map(String).map((v) => v.trim()).filter(Boolean)
@@ -376,7 +376,7 @@ export async function instanceRoutes(app: FastifyInstance) {
         : [];
     const evolutionBody: Record<string, unknown> = {
       enabled: body.enabled !== false,
-      apiUrl: typeof body.apiUrl === "string" ? body.apiUrl.trim().replace(/\\/$/, "") : "",
+      apiUrl: typeof body.apiUrl === "string" ? body.apiUrl.trim().replace(/\/$/, "") : "",
       triggerType,
       triggerOperator,
       triggerValue: rawTriggerType === "none" ? "" : String(body.triggerValue ?? body.triggerKeyword ?? ""),
