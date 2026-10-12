@@ -169,24 +169,29 @@ export async function instanceRoutes(app: FastifyInstance) {
 
     // Fetch the instance details only for the connected number.
     const instancesRes = await evolution.fetchInstances(inst.evolution_instance_name) as
-      | Array<Record<string, any>>
+      | Record<string, any>[]
       | Record<string, any>
       | null;
-    const first = Array.isArray(instancesRes)
-      ? (instancesRes.find((item) =>
-          item?.instance?.instanceName === inst.evolution_instance_name ||
-          item?.instanceName === inst.evolution_instance_name ||
-          item?.name === inst.evolution_instance_name
-        ) ?? instancesRes[0])
-      : instancesRes;
-    const raw = (first?.instance && typeof first.instance === "object" ? first.instance : first) ?? {};
+    // Normalize the response to an array before selecting the matching instance.
+    // This avoids relying on TypeScript's narrowing of an array/object union.
+    const instances: Record<string, any>[] = Array.isArray(instancesRes)
+      ? instancesRes
+      : instancesRes && typeof instancesRes === "object"
+        ? [instancesRes]
+        : [];
+    const first = instances.find((item) =>
+      item?.instance?.instanceName === inst.evolution_instance_name ||
+      item?.instanceName === inst.evolution_instance_name ||
+      item?.name === inst.evolution_instance_name
+    ) ?? instances[0] ?? {};
+    const raw = (first.instance && typeof first.instance === "object" ? first.instance : first) as Record<string, any>;
     // Evolution/Baileys varia o campo do número entre versões: owner, ownerJid,
     // number ou remoteJid. Normalizamos JID e sufixo de dispositivo para E.164.
     const candidate = raw.owner ?? raw.ownerJid ?? raw.number ?? raw.phoneNumber ??
-      raw.phone ?? raw.remoteJid ?? first?.owner ?? first?.ownerJid ??
-      first?.number ?? first?.phoneNumber ?? first?.phone ?? null;
+      raw.phone ?? raw.remoteJid ?? first.owner ?? first.ownerJid ??
+      first.number ?? first.phoneNumber ?? first.phone ?? null;
     const connectedNumber = candidate
-      ? String(candidate).split("@")[0].replace(/:\\d+$/, "").replace(/\\D/g, "") || null
+      ? String(candidate).split("@")[0].replace(/:\d+$/, "").replace(/\D/g, "") || null
       : null;
     await query(
       `UPDATE instances SET status=$2::instance_status,
