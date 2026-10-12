@@ -347,6 +347,9 @@ export async function instanceRoutes(app: FastifyInstance) {
     // Evolution v2 updates an existing bot by ID and instance name. Check first
     // rather than attempting create and relying on an error to detect duplicates.
     const existing = await findEvolutionBot(instanceName);
+    if (existing.bot && !existing.botId) {
+      throw new Error("Evolution Bot exists, but GET /evolutionBot/find did not return its ID; refusing to create a duplicate.");
+    }
     const result = existing.botId
       ? await evolution.raw("PUT", `/evolutionBot/update/${encodeURIComponent(existing.botId)}/${encodeURIComponent(instanceName)}`, body)
       : await evolution.raw("POST", `/evolutionBot/create/${encodeURIComponent(instanceName)}`, body);
