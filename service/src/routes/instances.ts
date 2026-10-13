@@ -51,10 +51,19 @@ export async function instanceRoutes(app: FastifyInstance) {
         base64: false,
         events: ["MESSAGES_UPSERT", "MESSAGES_UPDATE", "SEND_MESSAGE", "CONNECTION_UPDATE", "QRCODE_UPDATED"],
       },
-    })) as { instance?: { instanceId?: string }; hash?: string; qrcode?: { code?: string; base64?: string } };
+    })) as {
+      instance?: { instanceId?: string };
+      hash?: string | { apikey?: string; apiKey?: string; token?: string };
+      qrcode?: { code?: string; base64?: string };
+    };
 
     const evoInstanceId = evoResponse?.instance?.instanceId ?? null;
-    const evoToken = evoResponse?.hash ?? null;
+    const rawHash = evoResponse?.hash;
+    const evoToken = typeof rawHash === "string"
+      ? rawHash
+      : rawHash && typeof rawHash === "object"
+        ? rawHash.apikey ?? rawHash.apiKey ?? rawHash.token ?? null
+        : null;
     const qrBase64 = evoResponse?.qrcode?.base64 ?? null;
 
     // 2) persist
@@ -78,8 +87,66 @@ export async function instanceRoutes(app: FastifyInstance) {
       ],
     );
     const id = rows[0]!.id;
-    await audit({ tenantId: tenant.id, actor: `api_key:${tenant.apiKeyId}`, action: "instance.create", resourceType: "instance", resourceId: id, payload: { evoName } });
-    return reply.code(201).send({ id, evolution_instance_name: evoName, qr_code: qrBase64, status: "connecting" });
+
+    // Evolution generates this instance's API key during creation. Apply it as
+    // a custom header so the public inbound webhook can authenticate the sender.
+    let inboundWebhookConfigured = false;
+    if (evoToken) {
+      try {
+        await evolution.setWebhook(evoName, {
+          enabled: true,
+          url: inboundWebhook,
+          byEvents: false,
+          base64: false,
+          events: ["MESSAGES_UPSERT", "MESSAGES_UPDATE", "SEND_MESSAGE", "CONNECTION_UPDATE", "QRCODE_UPDATED"],
+          headers: { "X-Evolution-Token": evoToken },
+        });
+        inboundWebhookConfigured = true;
+      } catch (err) {
+        req.log.error({ err, evoName }, "instance created but inbound webhook auth configuration failed; use webhook/sync-inbound");
+      }
+    } else {
+      req.log.error({ evoName }, "Evolution did not return an instance API key; inbound webhook cannot be secured/configured");
+    }
+
+    await audit({ tenantId: tenant.id, actor: `api_key:${tenant.apiKeyId}`, action: "instance.create", resourceType: "instance", resourceId: id, payload: { evoName, inboundWebhookConfigured } });
+    return reply.code(201).send({
+      id, evolution_instance_name: evoName, qr_code: qrBase64, status: "connecting",
+      inbound_webhook_configured: inboundWebhookConfigured,
+    });
+  });
+
+  // ---------------------------------------------------------- repair inbound webhook auth for existing instances
+  app.post("/:id/webhook/sync-inbound", { preHandler: requireScope("instances:write") }, async (req) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
+    const { rows } = await query<{
+      evolution_instance_name: string;
+      evolution_token: string | null;
+    }>(
+      `SELECT evolution_instance_name, evolution_token
+         FROM instances WHERE id=$1 AND tenant_id=$2 AND deleted_at IS NULL`,
+      [id, req.tenant!.id],
+    );
+    const inst = rows[0];
+    if (!inst) throw Errors.notFound("instance");
+    if (!inst.evolution_token) {
+      throw Errors.upstream("Evolution instance API key is missing; cannot secure inbound webhook", { instanceId: id });
+    }
+
+    const inboundWebhook = `${config.PUBLIC_BASE_URL}/v1/hooks/evolution/${encodeURIComponent(inst.evolution_instance_name)}`;
+    await evolution.setWebhook(inst.evolution_instance_name, {
+      enabled: true,
+      url: inboundWebhook,
+      byEvents: false,
+      base64: false,
+      events: ["MESSAGES_UPSERT", "MESSAGES_UPDATE", "SEND_MESSAGE", "CONNECTION_UPDATE", "QRCODE_UPDATED"],
+      headers: { "X-Evolution-Token": inst.evolution_token },
+    });
+    await audit({
+      tenantId: req.tenant!.id, actor: `api_key:${req.tenant!.apiKeyId}`,
+      action: "instance.webhook.sync_inbound", resourceType: "instance", resourceId: id,
+    });
+    return { ok: true, inbound_webhook_configured: true };
   });
 
   // ---------------------------------------------------------- get by id
