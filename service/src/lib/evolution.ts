@@ -51,7 +51,7 @@ export const evolution = {
     instanceName: string;
     integration?: string;
     qrcode?: boolean;
-    webhook?: { url: string; byEvents?: boolean; base64?: boolean; events?: string[] };
+    webhook?: { url: string; byEvents?: boolean; base64?: boolean; events?: string[]; headers?: Record<string, string> };
   }) => evo("POST", `/instance/create`, { integration: "WHATSAPP-BAILEYS", qrcode: true, ...payload }),
 
   fetchInstances: (instanceName?: string) =>
