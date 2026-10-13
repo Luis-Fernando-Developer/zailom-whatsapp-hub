@@ -18,21 +18,15 @@ import { audit } from "../lib/audit.js";
  */
 export async function evolutionInboundRoutes(app: FastifyInstance) {
   app.post("/evolution/:evoName", async (req, reply) => {
-    if (config.EVOLUTION_INBOUND_TOKEN) {
-      const t = req.headers["x-evolution-token"];
-      if (t !== config.EVOLUTION_INBOUND_TOKEN) {
-        return reply.code(401).send({ error: { code: "unauthorized", message: "Invalid token" } });
-      }
-    }
-
     const { evoName } = z.object({ evoName: z.string().min(1) }).parse(req.params);
     const body = (req.body ?? {}) as Record<string, unknown>;
     const event = String(body.event ?? "unknown");
 
     const { rows } = await query<{
       id: string; tenant_id: string; webhook_url: string | null; webhook_events: string[];
+      evolution_token: string | null;
     }>(
-      `SELECT id, tenant_id, webhook_url, webhook_events
+      `SELECT id, tenant_id, webhook_url, webhook_events, evolution_token
          FROM instances WHERE evolution_instance_name = $1 AND deleted_at IS NULL`,
       [evoName],
     );
@@ -41,6 +35,15 @@ export async function evolutionInboundRoutes(app: FastifyInstance) {
       // Unknown instance — ack anyway so Evolution doesn't retry forever.
       req.log.warn({ evoName, event }, "inbound webhook for unknown instance");
       return reply.code(202).send({ received: true, matched: false });
+    }
+
+    // Prefer the API key generated for this specific Evolution instance.
+    // The shared environment token is only a legacy fallback for rows without one.
+    const receivedToken = req.headers["x-evolution-token"];
+    const expectedToken = inst.evolution_token || config.EVOLUTION_INBOUND_TOKEN;
+    if (!expectedToken || typeof receivedToken !== "string" || receivedToken !== expectedToken) {
+      req.log.warn({ evoName, event }, "rejected inbound webhook: invalid instance token");
+      return reply.code(401).send({ error: { code: "unauthorized", message: "Invalid token" } });
     }
 
     // Keep our local state consistent with Evolution.
