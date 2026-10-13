@@ -74,8 +74,11 @@ export const evolution = {
 
   // --- Webhook ------------------------------------------------------------
   getWebhook: (instanceName: string) => evo("GET", `/webhook/find/${encodeURIComponent(instanceName)}`),
+  // Evolution API v2.3.7 expects the webhook configuration nested under `webhook`.
+  // Sending these fields at the top level can leave the previous configuration in place,
+  // including a missing X-Evolution-Token header, which causes inbound 401 responses.
   setWebhook: (instanceName: string, body: Record<string, unknown>) =>
-    evo("POST", `/webhook/set/${encodeURIComponent(instanceName)}`, body),
+    evo("POST", `/webhook/set/${encodeURIComponent(instanceName)}`, { webhook: body }),
 
   // --- Messages -----------------------------------------------------------
   sendText: (i: string, body: unknown) => evo("POST", `/message/sendText/${encodeURIComponent(i)}`, body),
