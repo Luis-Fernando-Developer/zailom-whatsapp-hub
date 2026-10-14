@@ -74,18 +74,72 @@ export const evolution = {
 
   // --- Webhook ------------------------------------------------------------
   getWebhook: (instanceName: string) => evo("GET", `/webhook/find/${encodeURIComponent(instanceName)}`),
-  // Evolution API v2.3.7 expects webhook fields at the top level, using
-  // webhookByEvents/webhookBase64 (not byEvents/base64). Keep custom headers
-  // at the same level so the receiver gets X-Evolution-Token on each delivery.
-  setWebhook: (instanceName: string, body: Record<string, unknown>) => {
-    const payload: Record<string, unknown> = {
-      ...body,
-      webhookByEvents: body.webhookByEvents ?? body.byEvents ?? false,
-      webhookBase64: body.webhookBase64 ?? body.base64 ?? false,
+
+  // Evolution 2.3.x deployments differ on the webhook/set request envelope:
+  // some accept { webhook: {...} }, while others accept a flat payload.
+  // Prefer the nested contract (which preserves custom headers on 2.3.7),
+  // read the saved config back, and only then try the flat compatibility form.
+  setWebhook: async (instanceName: string, body: Record<string, unknown>) => {
+    const url = `/webhook/set/${encodeURIComponent(instanceName)}`;
+    const normalized: Record<string, unknown> = {
+      enabled: body.enabled ?? true,
+      url: body.url,
+      byEvents: body.byEvents ?? body.webhookByEvents ?? false,
+      base64: body.base64 ?? body.webhookBase64 ?? false,
+      events: body.events ?? [],
+      ...(body.headers && typeof body.headers === "object" ? { headers: body.headers } : {}),
     };
-    delete payload.byEvents;
-    delete payload.base64;
-    return evo("POST", `/webhook/set/${encodeURIComponent(instanceName)}`, payload);
+    const nested = { webhook: normalized };
+    const flat = {
+      ...normalized,
+      webhookByEvents: normalized.byEvents,
+      webhookBase64: normalized.base64,
+    };
+    let nestedError: unknown;
+    try {
+      const result = await evo("POST", url, nested);
+      const expectedHeaders = normalized.headers as Record<string, string> | undefined;
+      if (!expectedHeaders || Object.keys(expectedHeaders).length === 0) return result;
+
+      const saved = await evo("GET", `/webhook/find/${encodeURIComponent(instanceName)}`) as any;
+      const config = saved?.webhook?.webhook ?? saved?.webhook ?? saved?.data?.webhook ?? saved?.data ?? saved;
+      const actualHeaders = config?.headers;
+      const headersMatch = actualHeaders && typeof actualHeaders === "object" &&
+        Object.entries(expectedHeaders).every(([key, value]) => {
+          const actualKey = Object.keys(actualHeaders).find((candidate) => candidate.toLowerCase() === key.toLowerCase());
+          return actualKey !== undefined && actualHeaders[actualKey] === value;
+        });
+      if (headersMatch) return result;
+    } catch (err) {
+      nestedError = err;
+    }
+
+    try {
+      const result = await evo("POST", url, flat);
+      const expectedHeaders = normalized.headers as Record<string, string> | undefined;
+      if (!expectedHeaders || Object.keys(expectedHeaders).length === 0) return result;
+      const saved = await evo("GET", `/webhook/find/${encodeURIComponent(instanceName)}`) as any;
+      const config = saved?.webhook?.webhook ?? saved?.webhook ?? saved?.data?.webhook ?? saved?.data ?? saved;
+      const actualHeaders = config?.headers;
+      const headersMatch = actualHeaders && typeof actualHeaders === "object" &&
+        Object.entries(expectedHeaders).every(([key, value]) => {
+          const actualKey = Object.keys(actualHeaders).find((candidate) => candidate.toLowerCase() === key.toLowerCase());
+          return actualKey !== undefined && actualHeaders[actualKey] === value;
+        });
+      if (headersMatch) return result;
+      throw Errors.upstream("Evolution accepted webhook configuration but did not persist the required custom headers", {
+        instanceName,
+        tried: ["nested", "flat"],
+        headersPersisted: false,
+      });
+    } catch (flatError) {
+      if (flatError instanceof Error && flatError.message.includes("did not persist the required custom headers")) throw flatError;
+      throw Errors.upstream("Could not configure Evolution inbound webhook headers using either supported payload shape", {
+        instanceName,
+        nestedAttempt: nestedError instanceof Error ? nestedError.message : (nestedError ? "request failed" : "accepted but headers were not persisted"),
+        flatAttempt: flatError instanceof Error ? flatError.message : "request failed",
+      });
+    }
   },
 
   // --- Messages -----------------------------------------------------------
