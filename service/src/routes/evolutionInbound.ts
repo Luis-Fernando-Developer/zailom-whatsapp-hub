@@ -42,6 +42,27 @@ export async function evolutionInboundRoutes(app: FastifyInstance) {
     const receivedToken = req.headers["x-evolution-token"];
     const expectedToken = inst.evolution_token || config.EVOLUTION_INBOUND_TOKEN;
     if (!expectedToken || typeof receivedToken !== "string" || receivedToken !== expectedToken) {
+      // Self-heal the known Evolution v2 webhook-envelope drift when the
+      // instance has its own key but Evolution sends no custom header.
+      // Do not process this unauthenticated delivery: repair the config and
+      // require the next delivery to carry the per-instance token.
+      if (inst.evolution_token && (typeof receivedToken !== "string" || !receivedToken.trim())) {
+        try {
+          const canonicalUrl = `${config.PUBLIC_BASE_URL}/v1/hooks/evolution/${encodeURIComponent(evoName)}`;
+          const { evolution } = await import("../lib/evolution.js");
+          await evolution.setWebhook(evoName, {
+            enabled: true,
+            url: canonicalUrl,
+            byEvents: false,
+            base64: false,
+            events: ["MESSAGES_UPSERT", "MESSAGES_UPDATE", "SEND_MESSAGE", "CONNECTION_UPDATE", "QRCODE_UPDATED"],
+            headers: { "X-Evolution-Token": inst.evolution_token },
+          });
+          req.log.warn({ evoName, event }, "repaired Evolution inbound webhook headers; current unauthenticated delivery rejected");
+        } catch (repairError) {
+          req.log.error({ err: repairError, evoName, event }, "automatic Evolution webhook repair failed");
+        }
+      }
       req.log.warn({ evoName, event }, "rejected inbound webhook: invalid instance token");
       return reply.code(401).send({ error: { code: "unauthorized", message: "Invalid token" } });
     }
