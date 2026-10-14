@@ -432,7 +432,7 @@ export async function instanceRoutes(app: FastifyInstance) {
       regex: "regex",
       none: "none",
     };
-    const triggerOperator = rawTriggerType === "none"
+    const triggerOperator = rawTriggerOperator === "none"
       ? "none"
       : (operatorMap[rawTriggerOperator.replace(/[\s_-]/g, "")] ?? operatorMap[rawTriggerOperator] ?? "contains");
     const rawIgnoreJids = body.ignoreJids;
@@ -454,6 +454,7 @@ export async function instanceRoutes(app: FastifyInstance) {
       listeningFromMe: body.listeningFromMe === true,
       stopBotFromMe: body.stopBotFromMe === true,
       keepOpen: body.keepOpen === true,
+      splitMessages: body.splitMessages === true,
       debounceTime: Number(body.debounceTime ?? 0),
       ignoreJids,
     };
