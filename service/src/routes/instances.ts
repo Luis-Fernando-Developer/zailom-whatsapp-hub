@@ -328,7 +328,19 @@ export async function instanceRoutes(app: FastifyInstance) {
   });
   app.post("/:id/settings/set", { preHandler: requireScope("instances:write") }, async (req) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
-    const body = settingsBody.parse(req.body);
+    // Accept both Evolution camelCase and legacy Flow snake_case fields. This
+    // prevents older cached frontend bundles from silently sending an empty object.
+    const raw = z.record(z.unknown()).parse(req.body ?? {});
+    const body = settingsBody.parse({
+      ...raw,
+      rejectCall: raw.rejectCall ?? raw.reject_call,
+      msgCall: raw.msgCall ?? raw.msg_call,
+      groupsIgnore: raw.groupsIgnore ?? raw.groups_ignore,
+      alwaysOnline: raw.alwaysOnline ?? raw.always_online,
+      readMessages: raw.readMessages ?? raw.read_messages,
+      readStatus: raw.readStatus ?? raw.read_status,
+      syncFullHistory: raw.syncFullHistory ?? raw.sync_full_history,
+    });
     const inst = await loadInstance(req.tenant!.id, id);
     const res = await evolution.setSettings(inst.evolution_instance_name, body);
     await query(`UPDATE instances SET settings = settings || $2::jsonb WHERE id=$1`, [id, JSON.stringify(body)]);
