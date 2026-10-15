@@ -336,7 +336,7 @@ export async function instanceRoutes(app: FastifyInstance) {
   });
 
   // ---------------------------------------------------------- webhook (config del webhook OUT)
-  app.get("/:id/webhook/find", { preHandler: requireScope("webhooks:read") }, async (req) => {
+  app.get("/:id/webhook/find", { preHandler: requireScope("instances:read") }, async (req) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
     const inst = await loadInstance(req.tenant!.id, id);
     return {
@@ -446,7 +446,7 @@ export async function instanceRoutes(app: FastifyInstance) {
       apiUrl: typeof body.apiUrl === "string" ? body.apiUrl.trim().replace(/\/$/, "") : "",
       triggerType,
       triggerOperator,
-      triggerValue: rawTriggerType === "none" ? "" : String(body.triggerValue ?? body.triggerKeyword ?? ""),
+      triggerValue: rawTriggerOperator === "none" ? "" : String(body.triggerValue ?? body.triggerKeyword ?? ""),
       expire: Number(body.expire ?? 0),
       keywordFinish: String(body.keywordFinish ?? "#SAIR"),
       delayMessage: Number(body.delayMessage ?? 1000),
